@@ -4,12 +4,22 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
+fastapi = "*"
 langchain-ollama = "*"
 langchain-core = "*"
 langgraph = "*"
 mcp = "*"
 langchain-mcp-adapters = "*"
 asgiref = "*"
+sqlalchemy = "*"
+psycopg2-binary = "*"
+langchain = "*"
+pytest = "*"
+asyncpg = "*"
+langchain-aws = "*"
+pandas = "*"
+openpyxl = "*"
+anyio = "*"
 
 [dev-packages]
 

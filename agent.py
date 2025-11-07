@@ -5,7 +5,7 @@ from asgiref.sync import async_to_sync
 from postgresmcpserver import PostgresMCPServer
 
 # prompt = "list all tables in public schema"
-prompt = "list all columns in tbl_students in public schema"
+prompt = "list names of columns in tbl_students in public schema"
 # thread_id = input("thread_id")
 # if not thread_id:
 thread_id = str(uuid.uuid4())
