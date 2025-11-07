@@ -240,14 +240,11 @@ const isPieChartData = (content) => {
       let messageData = null;
 
       if (data.data && Array.isArray(data.data)) {
-        // API returns data in separate property
         assistantMessage = data.answer || 'Here is the data:';
         messageData = data.data;
       } else if (isTableData(data.answer || data.response)) {
-        // API returns stringified/Python representation in answer
         assistantMessage = data.answer || data.response;
       } else {
-        // Regular text response
         assistantMessage = data.answer || data.response || JSON.stringify(data);
       }
 
