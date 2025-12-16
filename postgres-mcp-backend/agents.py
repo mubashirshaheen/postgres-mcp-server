@@ -6,13 +6,14 @@ from typing import Optional
 from asgiref.sync import async_to_sync
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from requests import Session
 
 import crud
 import models
 import schemas
+import config
 from database import SessionLocal, engine
 from postgresmcpserver import PostgresMCPServer
+from sqlalchemy.orm import Session
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -26,6 +27,9 @@ class ChatRequest(BaseModel):
 
 
 def get_db():
+    """
+        Get a database session.
+    """
     db = SessionLocal()
     try:
         yield db
@@ -34,22 +38,22 @@ def get_db():
 
 
 @router.post("")
-def chat(request: ChatRequest):
+def chat(request: ChatRequest, db: Session = Depends(get_db)):
     """
-    :param request:
+    :param
+    request:
+    db:
     :return:
     """
     prompt = request.question
     thread_id = request.thread_id
     if not thread_id:
         thread_id = str(uuid.uuid4())
-    agent = PostgresMCPServer()
+    agent = PostgresMCPServer(region=config.region)
 
     answer = async_to_sync(agent.run_agent)(prompt, thread_id)
-    if isinstance(answer, dict) and answer.get("type") == "text":
-        answer = answer.get("text")
     # Save to DB
-    # chat_data = schemas.AiChatCreate(prompt=prompt, response=answer, thread_id=thread_id)
-    # crud.save_chat(db, chat_data)
+    chat_data = schemas.MCPLogsCreate(prompt=prompt, response=str(answer), thread_id=thread_id)
+    crud.save_chat(db, chat_data)
 
     return {"thread_id": thread_id, "answer": answer}
