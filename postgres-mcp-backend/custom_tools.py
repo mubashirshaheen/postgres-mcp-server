@@ -1,29 +1,40 @@
 """custom_tools.py"""
 from __future__ import annotations
 
+import datetime
 import json
 import os
 
 from dotenv import load_dotenv
 from langchain.tools import tool
 from sqlalchemy import create_engine, inspect
-from typing import List, Union, Any, Coroutine
-
+from typing import List, Any
 import asyncpg
+import config
 
 load_dotenv()
-DB_URL = os.getenv("DB_URL", "").replace("postgres://", "postgresql://")
+DB_URL = config.DB_URL.replace("postgres://", "postgresql://")
 engine = create_engine(DB_URL)
 inspector = inspect(engine)
 
 
-def _to_result(data):
-    if not data:
-        return "No data found for the given criteria."
-    return data
+def make_json_serializable(obj):
+    """
+    :param obj:
+    :return:
+    """
+    from datetime import datetime
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, int):
+        return str(obj)
+    try:
+        return json.loads(obj)
+    except Exception:
+        return obj
 
 
-@tool("list_tables", return_direct=True, description="List tables")
+@tool("list_tables", return_direct=True, description="List all tables")
 def list_tables_tool() -> List[str]:
     """Return all table names in the PostgreSQL database."""
     return inspector.get_table_names()
@@ -52,7 +63,7 @@ async def get_large_array_tool(table_name: str, length: int, less_than: bool, as
 
         if table_name not in inspector.get_table_names():
             return f"Table '{table_name}' does not exist."
-        query = f"SELECT * FROM {table_name} "
+        query = f"SELECT id, master_name, atomic_alias_array, ratified, created_at  FROM {table_name} "
         if less_than:
             query = query + f" WHERE array_length(atomic_alias_array, 1) < {length}"
         else:
@@ -73,17 +84,12 @@ async def get_large_array_tool(table_name: str, length: int, less_than: bool, as
             response = []
             for result in results:
                 record_dict = dict(result)
-                # Handle array and other complex types
-                for key, value in record_dict.items():
-                    if isinstance(value, list):
-                        record_dict[key] = value
-                    elif hasattr(value, '__iter__') and not isinstance(value, (str, bytes)):
-                        record_dict[key] = list(value)
-
+                for k, v in record_dict.items():
+                    record_dict[k] = make_json_serializable(v)
                 response.append(record_dict)
             return response
         else:
-            return "No records found with atomic_alias_array length > 100"
+            return f"No records found with atomic_alias_array length > {length}"
 
     except Exception as e:
         return f"Error executing query: {str(e)}"
@@ -100,23 +106,12 @@ async def get_supplier_tool(component: str, limit: int = 20) -> None | list[Any]
     """
     try:
         conn = await asyncpg.connect(DB_URL)
-        query = f"select * from alias_record where component = '{component}'"
+        query = f"select id, supplier, component, version, release, scope, master_pair_id, created_at from alias_record where component = '{component}'"
         if limit:
             query = query + f" limit {limit}"
         results = await conn.fetch(query)
         await conn.close()
         if results:
-            def make_json_serializable(obj):
-                from datetime import datetime
-                if isinstance(obj, datetime):
-                    return obj.isoformat()
-                if isinstance(obj, int):
-                    return str(obj)
-                try:
-                    return json.loads(obj)
-                except Exception:
-                    return obj
-
             response = []
             for result in results:
                 record_dict = dict(result)
@@ -135,28 +130,17 @@ async def get_component_tool(supplier: str, limit: int = 20) -> None | list[Any]
     """
     Get component records for a given supplier from alias_record table.
 
-    Returns:
+    Returns
         JSON string containing the query result or error message
     """
     try:
         conn = await asyncpg.connect(DB_URL)
-        query = f"select * from alias_record where supplier = '{supplier}'"
+        query = f"select id, supplier, component, version, release, scope, master_pair_id, created_at  from alias_record where supplier = '{supplier}'"
         if limit:
             query = query + f" limit {limit}"
         results = await conn.fetch(query)
         await conn.close()
         if results:
-            def make_json_serializable(obj):
-                from datetime import datetime
-                if isinstance(obj, datetime):
-                    return obj.isoformat()
-                if isinstance(obj, int):
-                    return str(obj)
-                try:
-                    return json.loads(obj)
-                except Exception:
-                    return obj
-
             response = []
             for result in results:
                 record_dict = dict(result)
@@ -169,10 +153,13 @@ async def get_component_tool(supplier: str, limit: int = 20) -> None | list[Any]
         return f"Error executing query: {str(e)}"
 
 
-@tool("create_excel", return_direct=True, description="Create an Excel report based on the provided SQL query.")
-async def create_excel(sql_query) -> None | list[Any] | str:
+@tool("create_excel", return_direct=True, description="Create an Excel report based on the provided SQL query if excel keyword in user prompt.")
+async def create_excel(sql_query, file_name_suggestion: str = "") -> None | dict[str, str] | str:
     """
     This creates an Excel report based on the provided SQL query.
+    param:
+        sql_query: The SQL query to execute.
+        file_name_suggestion: Suggested name for the Excel file without .xlsx.
 
     Returns:
         Excel file or error message
@@ -182,19 +169,6 @@ async def create_excel(sql_query) -> None | list[Any] | str:
         results = await conn.fetch(sql_query)
         await conn.close()
         if results:
-
-            def make_json_serializable(obj):
-                """Convert non-serializable objects to serializable formats."""
-                from datetime import datetime
-                if isinstance(obj, datetime):
-                    return obj.isoformat()
-                if isinstance(obj, int):
-                    return str(obj)
-                try:
-                    return json.loads(obj)
-                except Exception:
-                    return obj
-
             response = []
             for result in results:
                 record_dict = dict(result)
@@ -205,15 +179,18 @@ async def create_excel(sql_query) -> None | list[Any] | str:
             # Create Excel file from response
             import pandas as pd
             import uuid
+            from fastapi.responses import FileResponse
 
             df = pd.DataFrame(response)
-
-            out_dir = os.path.join(os.getcwd(), "reports")
+            backend_dir = os.path.dirname(os.path.abspath(__file__))
+            out_dir = os.path.join(backend_dir, "reports")
             os.makedirs(out_dir, exist_ok=True)
-            file_path = os.path.join(out_dir, f"query_result_{uuid.uuid4().hex}.xlsx")
+            filename = f"{file_name_suggestion}_{datetime.datetime.now()}.xlsx"
+            file_path = os.path.join(out_dir, filename)
             df.to_excel(file_path, index=False)
 
-            return file_path
+            return {"file_path": file_path, "filename": filename}
+
     except Exception as e:
         return f"Error executing query: {str(e)}"
 
@@ -240,17 +217,6 @@ async def count_products_tool(start_date, end_date) -> None | list[Any] | str:
         results = await conn.fetch(query)
         await conn.close()
         if results:
-            def make_json_serializable(obj):
-                from datetime import datetime
-                if isinstance(obj, datetime):
-                    return obj.isoformat()
-                if isinstance(obj, int):
-                    return str(obj)
-                try:
-                    return json.loads(obj)
-                except Exception:
-                    return obj
-
             response = []
             for result in results:
                 record_dict = dict(result)
@@ -284,17 +250,6 @@ async def create_chart_products(start_date, end_date) -> None | dict[str, Any] |
         results = await conn.fetch(query)
         await conn.close()
         if results:
-            def make_json_serializable(obj):
-                from datetime import datetime
-                if isinstance(obj, datetime):
-                    return obj.isoformat()
-                if isinstance(obj, int):
-                    return str(obj)
-                try:
-                    return json.loads(obj)
-                except Exception:
-                    return obj
-
             response = []
             for result in results:
                 record_dict = dict(result)
